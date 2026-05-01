@@ -1,0 +1,577 @@
+---
+title: "ACM-4th: Generalized Context Model on the Alien Game"
+output: html_document
+---
+
+```{r setup}
+### Packages
+set.seed(0)
+pacman::p_load(cmdstanr, tidyverse, cowplot, posterior, tidybayes, ggh4x, ggpmisc, priorsense)
+theme_set(theme_cowplot())
+
+### Sampler config -- one knob, used everywhere
+n_warmup    <- 1000
+n_sampling  <- 1500
+n_chains    <- 4
+adapt_delta <- 0.9
+```
+
+Participants categorise alien stimuli described by 5 binary features (spots, slim legs, eyes on stalks, arms up, green) into a 2x2 danger x nutrition grid. In session 1 the danger rule is a conjunction: f1 AND f3 (spots AND eyes on stalks). We model the binary danger response with the Generalized Context Model (GCM): similarity-weighted memory of past exemplars, with learned attention weights over the 5 features. The model is a natural fit here because participants observe individual stimuli sequentially, and a similarity-based account lets us ask which features they actually attend to.
+
+```{r gcm-helpers}
+### GCM agent (R)
+distance <- function(vect1, vect2, w) {
+  sum(w * abs(vect1 - vect2))
+}
+
+similarity <- function(dist_val, c) {
+  exp(-c * dist_val)
+}
+
+gcm_simulate <- function(w,            # attention weights (sums to 1)
+                         c,            # sensitivity (natural scale, strictly positive)
+                         bias,         # response bias towards category 1
+                         obs,          # matrix of stimulus features (trials x features)
+                         cat_feedback, # true category labels (0 or 1)
+                         quiet = TRUE) {
+  ntrials   <- nrow(obs)
+  nfeatures <- ncol(obs)
+
+  prob_cat1    <- numeric(ntrials)
+  sim_response <- numeric(ntrials)
+
+  memory_obs <- matrix(NA_real_, nrow = 0, ncol = nfeatures)
+  memory_cat <- numeric(0)
+
+  for (i in seq_len(ntrials)) {
+    if (!quiet && i %% 20 == 0) cat("Simulating trial:", i, "\n")
+
+    current_stim <- as.numeric(obs[i, ])
+    n_mem        <- nrow(memory_obs)
+    has_cat0     <- any(memory_cat == 0)
+    has_cat1     <- any(memory_cat == 1)
+
+    if (n_mem == 0 || !has_cat0 || !has_cat1) {
+      prob_cat1[i] <- bias
+    } else {
+      sims <- vapply(seq_len(n_mem), function(e) {
+        similarity(distance(current_stim, memory_obs[e, ], w), c)
+      }, numeric(1))
+
+      # mean over sum: kills category-frequency bias when one category fills memory
+      m1  <- mean(sims[memory_cat == 1])
+      m0  <- mean(sims[memory_cat == 0])
+      num <- bias * m1
+      den <- num + (1 - bias) * m0
+
+      prob_cat1[i] <- if (den > 1e-9) num / den else bias
+      prob_cat1[i] <- pmax(1e-9, pmin(1 - 1e-9, prob_cat1[i]))
+    }
+
+    sim_response[i] <- rbinom(1, 1, prob_cat1[i])
+
+    memory_obs <- rbind(memory_obs, current_stim)
+    memory_cat <- c(memory_cat, cat_feedback[i])
+  }
+
+  tibble(prob_cat1 = prob_cat1, sim_response = sim_response)
+}
+
+rdirichlet <- function(n, alpha) {
+  x <- matrix(rgamma(n * length(alpha), alpha), nrow = n, byrow = TRUE)
+  x / rowSums(x)
+}
+```
+
+```{r schedule}
+### 32 binary stimuli, 96-trial training schedule (3 randomised cycles)
+all_stimuli <- expand.grid(f1=0:1, f2=0:1, f3=0:1, f4=0:1, f5=0:1) |> as_tibble()
+all_stimuli <- all_stimuli |>
+  mutate(danger = as.integer(f1 == 1 & f3 == 1))
+
+make_schedule <- function(stimuli, n_cycles = 3, seed = 0) {
+  set.seed(seed)
+  map_dfr(seq_len(n_cycles), function(cycle) {
+    stimuli[sample(nrow(stimuli)), ] |>
+      mutate(cycle = cycle, trial = row_number() + (cycle - 1) * nrow(stimuli))
+  })
+}
+
+schedule <- make_schedule(all_stimuli)
+obs_mat  <- as.matrix(select(schedule, f1:f5))
+cat_true <- schedule$danger
+```
+
+```{r sim-grid, fig.width=10}
+### Simulation grid: attention regime x sensitivity x agent
+w_regimes <- list(
+  uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
+  truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
+  wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
+)
+c_values <- c(0.5, 2, 6)
+n_agents <- 5
+
+sim_grid <- expand_grid(
+  w_name = names(w_regimes),
+  c_val  = c_values,
+  agent  = seq_len(n_agents)
+) |>
+  mutate(sim = pmap(list(w_name, c_val, agent), function(wn, cv, ag) {
+    set.seed(ag)
+    gcm_simulate(w = w_regimes[[wn]], c = cv, bias = 0.5,
+                 obs = obs_mat, cat_feedback = cat_true)
+  })) |>
+  unnest(sim) |>
+  group_by(w_name, c_val, agent) |>
+  mutate(trial = row_number(),
+         correct = sim_response == cat_true,
+         cum_acc = cummean(correct)) |>
+  ungroup()
+
+ggplot(sim_grid |>
+         group_by(w_name, c_val, trial) |>
+         summarise(mean_acc = mean(cum_acc), .groups = "drop"),
+       aes(x = trial, y = mean_acc, colour = factor(c_val))) +
+  geom_line() +
+  facet_wrap(~w_name, labeller = label_both) +
+  scale_colour_brewer(palette = "Set1", name = "c") +
+  labs(title = "Mean cumulative accuracy by attention regime and sensitivity",
+       x = "Trial", y = "Cumulative accuracy") +
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
+```
+
+```{r prior-pred, fig.width=9}
+### Prior predictive ribbons
+n_prior <- 500
+
+set.seed(0)
+prior_draws <- tibble(
+  draw  = seq_len(n_prior),
+  w     = map(seq_len(n_prior), ~as.numeric(rdirichlet(1, rep(1, 5)))),
+  log_c = rnorm(n_prior, log(2), 1),
+  bias  = rbeta(n_prior, 1, 1)
+) |> mutate(c = exp(log_c))
+
+prior_sims <- prior_draws |>
+  mutate(sim = pmap(list(w, c, bias), function(wv, cv, bv) {
+    gcm_simulate(w = wv, c = cv, bias = bv, obs = obs_mat, cat_feedback = cat_true)
+  })) |>
+  unnest(sim) |>
+  group_by(draw) |>
+  mutate(trial = row_number(), cum_acc = cummean(sim_response == cat_true)) |>
+  ungroup()
+
+prior_ribbons <- prior_sims |>
+  group_by(trial) |>
+  summarise(
+    q05 = quantile(cum_acc, 0.05), q25 = quantile(cum_acc, 0.25),
+    q50 = quantile(cum_acc, 0.50), q75 = quantile(cum_acc, 0.75),
+    q95 = quantile(cum_acc, 0.95),
+    .groups = "drop"
+  )
+
+ggplot(prior_ribbons, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
+  geom_ribbon(aes(ymin = q25, ymax = q75), alpha = 0.25, fill = "steelblue") +
+  geom_line(aes(y = q50), colour = "steelblue", linewidth = 0.8) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4) +
+  labs(title = "Prior predictive: cumulative accuracy (5/25/50/75/95 percentiles)",
+       x = "Trial", y = "Cumulative accuracy")
+```
+
+```{r stan-sim-fit}
+### Fit Stan to one simulated agent
+mod <- cmdstan_model("./stan/GCM.stan")
+
+true_w    <- c(0.45, 0.025, 0.45, 0.025, 0.05)
+true_c    <- 2
+true_bias <- 0.5
+
+set.seed(42)
+sim_agent <- gcm_simulate(w = true_w, c = true_c, bias = true_bias,
+                          obs = obs_mat, cat_feedback = cat_true)
+
+stan_data_sim <- list(
+  N_total           = nrow(obs_mat),
+  N_features        = ncol(obs_mat),
+  y                 = sim_agent$sim_response,
+  obs               = obs_mat,
+  cat_feedback      = cat_true,
+  prior_w_alpha     = rep(1, 5),
+  prior_log_c_mu    = log(2),
+  prior_log_c_sigma = 1,
+  prior_bias_alpha  = 1,
+  prior_bias_beta   = 1,
+  run_diagnostics   = 1
+)
+
+cache_sim <- "./fits/sim_agent.rds"
+if (file.exists(cache_sim)) {
+  fit_sim <- readRDS(cache_sim)
+} else {
+  init_sim <- tryCatch(
+    mod$pathfinder(data = stan_data_sim, refresh = 0)$draws(),
+    error = function(e) "random"
+  )
+  fit_sim <- mod$sample(
+    data            = stan_data_sim,
+    init            = init_sim,
+    seed            = 0,
+    chains          = n_chains,
+    parallel_chains = n_chains,
+    iter_warmup     = n_warmup,
+    iter_sampling   = n_sampling,
+    adapt_delta     = adapt_delta,
+    refresh         = 200
+  )
+  fit_sim$save_object(cache_sim)
+}
+
+fit_sim$summary(c("w", "log_c", "c", "bias")) |>
+  select(variable, mean, sd, rhat, ess_bulk, ess_tail)
+```
+
+```{r prior-post-plot, fig.width=12, fig.height=8}
+### Prior-posterior update on the simulated agent
+post_draws_sim <- as_draws_df(fit_sim$draws(c("w", "log_c", "c", "bias"))) |>
+  as_tibble()
+
+# w columns must come from the same Dirichlet draw, not independent column samples
+set.seed(0)
+n_post      <- nrow(post_draws_sim)
+w_prior_mat <- rdirichlet(n_post, rep(1, 5))
+prior_df <- tibble(
+  `w[1]` = w_prior_mat[, 1], `w[2]` = w_prior_mat[, 2],
+  `w[3]` = w_prior_mat[, 3], `w[4]` = w_prior_mat[, 4],
+  `w[5]` = w_prior_mat[, 5],
+  log_c  = rnorm(n_post, log(2), 1),
+  bias   = rbeta(n_post, 1, 1),
+  source = "Prior"
+) |> mutate(c = exp(log_c))
+
+post_df <- post_draws_sim |>
+  select(`w[1]`, `w[2]`, `w[3]`, `w[4]`, `w[5]`, log_c, c, bias) |>
+  mutate(source = "Posterior")
+
+truth_df <- tibble(
+  parameter = c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "log_c", "c", "bias"),
+  truth     = c(true_w, log(true_c), true_c, true_bias)
+)
+
+combined <- bind_rows(prior_df, post_df) |>
+  pivot_longer(-source, names_to = "parameter", values_to = "value")
+
+ggplot(combined, aes(x = value, fill = source, colour = source)) +
+  geom_density(alpha = 0.35, linewidth = 0.7) +
+  geom_vline(data = truth_df, aes(xintercept = truth),
+             linetype = "dashed", colour = "#E84855", linewidth = 0.7) +
+  facet_wrap(~parameter, scales = "free", ncol = 4) +
+  scale_fill_manual(values   = c(Prior = "grey60", Posterior = "royalblue3")) +
+  scale_colour_manual(values = c(Prior = "grey40", Posterior = "black")) +
+  labs(title = "Prior vs posterior (simulated agent)", x = NULL, y = "Density",
+       fill = NULL, colour = NULL) +
+  theme(legend.position = "bottom")
+```
+
+```{r post-pred-check, fig.width=9}
+### Posterior predictive check (yrep simulated in R from prob_cat1)
+prob_draws <- as_draws_matrix(fit_sim$draws("prob_cat1"))
+
+set.seed(0)
+n_yrep   <- 200
+idx      <- sample(nrow(prob_draws), n_yrep)
+yrep_mat <- apply(prob_draws[idx, ], c(1, 2), function(p) rbinom(1, 1, p))
+
+obs_cum  <- tibble(trial = seq_len(nrow(obs_mat)),
+                   cum_acc = cummean(sim_agent$sim_response == cat_true),
+                   source = "Observed")
+
+yrep_cum <- map_dfr(seq_len(n_yrep), function(i) {
+  tibble(trial   = seq_len(nrow(obs_mat)),
+         cum_acc = cummean(yrep_mat[i, ] == cat_true),
+         draw    = i)
+})
+
+yrep_ribbons <- yrep_cum |>
+  group_by(trial) |>
+  summarise(q05 = quantile(cum_acc, 0.05), q25 = quantile(cum_acc, 0.25),
+            q50 = quantile(cum_acc, 0.50), q75 = quantile(cum_acc, 0.75),
+            q95 = quantile(cum_acc, 0.95), .groups = "drop")
+
+ggplot(yrep_ribbons, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
+  geom_ribbon(aes(ymin = q25, ymax = q75), alpha = 0.25, fill = "steelblue") +
+  geom_line(aes(y = q50), colour = "steelblue", linewidth = 0.8) +
+  geom_line(data = obs_cum, aes(y = cum_acc), colour = "#E84855", linewidth = 0.8) +
+  labs(title = "Posterior predictive check (red = observed, blue = yrep)",
+       x = "Trial", y = "Cumulative accuracy")
+```
+
+```{r param-recovery, fig.width=10}
+### Parameter recovery sweep
+w_settings <- list(
+  truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
+  uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
+  wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
+)
+c_settings   <- c(0.5, 2, 6)
+n_recov_reps <- 1
+
+recov_results <- list()
+
+for (wn in names(w_settings)) {
+  for (cv in c_settings) {
+    for (rep in seq_len(n_recov_reps)) {
+      cache_recov <- file.path("fits", paste0("recov_", wn, "_c", cv, "_r", rep, ".rds"))
+
+      set.seed(rep * 100)
+      ag <- gcm_simulate(w = w_settings[[wn]], c = cv, bias = 0.5,
+                         obs = obs_mat, cat_feedback = cat_true)
+
+      sdat <- list(
+        N_total = nrow(obs_mat), N_features = ncol(obs_mat),
+        y = ag$sim_response, obs = obs_mat, cat_feedback = cat_true,
+        prior_w_alpha = rep(1, 5), prior_log_c_mu = log(2),
+        prior_log_c_sigma = 1, prior_bias_alpha = 1, prior_bias_beta = 1,
+        run_diagnostics = 0
+      )
+
+      if (file.exists(cache_recov)) {
+        fit_r <- readRDS(cache_recov)
+      } else {
+        init_r <- tryCatch(
+          mod$pathfinder(data = sdat, refresh = 0)$draws(),
+          error = function(e) "random"
+        )
+        fit_r <- mod$sample(
+          data = sdat, init = init_r, seed = rep,
+          chains = n_chains, parallel_chains = n_chains,
+          iter_warmup = n_warmup, iter_sampling = n_sampling,
+          adapt_delta = adapt_delta, refresh = 0
+        )
+        fit_r$save_object(cache_recov)
+      }
+
+      dr <- as_draws_df(fit_r$draws(c("w", "c", "bias"))) |> as_tibble()
+
+      recov_results[[length(recov_results) + 1]] <- bind_rows(
+        tibble(parameter = paste0("w[", 1:5, "]"),
+               true_val  = w_settings[[wn]],
+               est_mean  = colMeans(select(dr, starts_with("w["))),
+               est_sd    = apply(select(dr, starts_with("w[")), 2, sd)),
+        tibble(parameter = c("c", "bias"),
+               true_val  = c(cv, 0.5),
+               est_mean  = c(mean(dr$c), mean(dr$bias)),
+               est_sd    = c(sd(dr$c),   sd(dr$bias)))
+      ) |> mutate(w_setting = wn, c_true = cv)
+    }
+  }
+}
+
+recov_df <- bind_rows(recov_results)
+
+ggplot(recov_df, aes(x = true_val, y = est_mean, colour = parameter)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey30") +
+  geom_errorbar(aes(ymin = est_mean - est_sd, ymax = est_mean + est_sd),
+                width = 0, alpha = 0.5) +
+  geom_point(alpha = 0.9, size = 2) +
+  facet_wrap(~parameter, scales = "free") +
+  scale_colour_brewer(palette = "Set2", guide = "none") +
+  labs(title = "Parameter recovery", x = "True value", y = "Posterior mean +/- SD") +
+  theme_cowplot()
+```
+
+```{r empirical-explore, fig.width=10}
+### Empirical data: parse, assert rule, plot accuracy by condition
+parse_stimulus <- function(s) {
+  chars <- strsplit(sub("\\.jpg$", "", s), "")[[1]]
+  as.integer(chars)
+}
+
+alien_raw <- read_csv("./data/AlienData.txt", show_col_types = FALSE) |>
+  filter(test == 0)  # transfer trials (test == 1) use a different stimulus encoding
+
+alien <- alien_raw |>
+  mutate(
+    features = map(stimulus, parse_stimulus),
+    f1 = map_int(features, 1), f2 = map_int(features, 2),
+    f3 = map_int(features, 3), f4 = map_int(features, 4),
+    f5 = map_int(features, 5),
+    danger_response = as.integer(response %in% c(3L, 4L)),
+    cat_danger      = as.integer(f1 == 1 & f3 == 1)
+  )
+
+# Most subject IDs cover one person per condition, so each individual is (subject, condition).
+check <- alien |> filter(session == 1)
+stopifnot(all(check$cat_danger == check$dangerous))
+message("Assertion passed: session-1 rule matches `dangerous` column.")
+
+dat_s1 <- alien |> filter(session == 1)
+
+dat_s1 |>
+  arrange(subject, condition, trial) |>
+  group_by(subject, condition) |>
+  mutate(cum_acc = cummean(danger_response == dangerous)) |>
+  group_by(condition, trial) |>
+  summarise(mean_acc = mean(cum_acc), .groups = "drop") |>
+  ggplot(aes(x = trial, y = mean_acc, colour = factor(condition))) +
+  geom_line(linewidth = 0.8) +
+  scale_colour_brewer(palette = "Set1", name = "Condition",
+                      labels = c("1" = "Dyad", "2" = "Individual")) +
+  labs(title = "Empirical cumulative accuracy by condition (session 1)",
+       x = "Trial", y = "Cumulative accuracy") +
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
+```
+
+```{r empirical-fit}
+### Per-(subject, condition) fits. Cap to a small subset; raise after profiling.
+subj_cond_pairs <- dat_s1 |>
+  distinct(subject, condition) |>
+  arrange(subject, condition)
+
+pairs_to_fit <- head(subj_cond_pairs, 5)
+
+emp_draws       <- tibble()
+emp_predictions <- tibble()
+emp_diagnostics <- tibble()
+
+for (i in seq_len(nrow(pairs_to_fit))) {
+  subj_id    <- pairs_to_fit$subject[i]
+  cond_id    <- pairs_to_fit$condition[i]
+  fit_id     <- sprintf("subj_%d_cond_%d", subj_id, cond_id)
+  cache_path <- file.path("fits", paste0(fit_id, ".rds"))
+
+  subj_dat <- dat_s1 |>
+    filter(subject == subj_id, condition == cond_id) |>
+    arrange(trial)
+
+  sdat <- list(
+    N_total           = nrow(subj_dat),
+    N_features        = 5L,
+    y                 = subj_dat$danger_response,
+    obs               = as.matrix(select(subj_dat, f1:f5)),
+    cat_feedback      = subj_dat$cat_danger,
+    prior_w_alpha     = rep(1, 5),
+    prior_log_c_mu    = log(2),
+    prior_log_c_sigma = 1,
+    prior_bias_alpha  = 1,
+    prior_bias_beta   = 1,
+    run_diagnostics   = 1
+  )
+
+  if (file.exists(cache_path)) {
+    fit <- readRDS(cache_path)
+  } else {
+    t0 <- proc.time()
+
+    init_fn <- tryCatch(
+      mod$pathfinder(data = sdat, refresh = 0)$draws(),
+      error = function(e) "random"
+    )
+    fit <- mod$sample(
+      data            = sdat,
+      init            = init_fn,
+      seed            = 0,
+      chains          = n_chains,
+      parallel_chains = n_chains,
+      iter_warmup     = n_warmup,
+      iter_sampling   = n_sampling,
+      adapt_delta     = adapt_delta,
+      refresh         = 0
+    )
+    elapsed <- (proc.time() - t0)[["elapsed"]]
+    if (i == 1)
+      message(sprintf("First fit (%s) took %.1f s. Multiply by ~%d for the full sweep.",
+                      fit_id, elapsed, nrow(subj_cond_pairs)))
+
+    fit$save_object(cache_path)
+  }
+
+  dr <- as_draws_df(fit$draws()) |> as_tibble() |>
+    mutate(fit_id = fit_id, subject = subj_id, condition = cond_id)
+  emp_draws <- bind_rows(emp_draws, dr)
+
+  prob_mat <- as_draws_matrix(fit$draws("prob_cat1"))
+  set.seed(0)
+  idx_pp  <- sample(nrow(prob_mat), 200)
+  yrep_pp <- apply(prob_mat[idx_pp, ], c(1, 2), function(p) rbinom(1, 1, p))
+
+  pred_ribbons <- map_dfr(seq_len(nrow(yrep_pp)), function(j) {
+    tibble(trial   = seq_len(nrow(subj_dat)),
+           cum_acc = cummean(yrep_pp[j, ] == subj_dat$cat_danger),
+           draw    = j, fit_id = fit_id)
+  }) |>
+    group_by(fit_id, trial) |>
+    summarise(q05 = quantile(cum_acc, 0.05), q25 = quantile(cum_acc, 0.25),
+              q50 = quantile(cum_acc, 0.50), q75 = quantile(cum_acc, 0.75),
+              q95 = quantile(cum_acc, 0.95), .groups = "drop") |>
+    mutate(obs_acc = with(subj_dat, cummean(danger_response == cat_danger)[seq_len(nrow(subj_dat))]))
+
+  emp_predictions <- bind_rows(emp_predictions, pred_ribbons)
+
+  diag_df <- fit$sampler_diagnostics() |> as_draws_df() |> as_tibble() |>
+    select(divergent__, .chain, .iteration, .draw) |>
+    mutate(fit_id = fit_id, subject = subj_id, condition = cond_id)
+  emp_diagnostics <- bind_rows(emp_diagnostics, diag_df)
+}
+```
+
+```{r empirical-prior-post, fig.width=13, fig.height=6}
+### Per-fit prior-posterior densities
+params_to_plot <- c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "log_c", "bias")
+
+set.seed(0)
+n_pp <- 6000
+w_pp <- rdirichlet(n_pp, rep(1, 5))
+prior_emp <- tibble(
+  `w[1]` = w_pp[,1], `w[2]` = w_pp[,2], `w[3]` = w_pp[,3],
+  `w[4]` = w_pp[,4], `w[5]` = w_pp[,5],
+  log_c  = rnorm(n_pp, log(2), 1),
+  bias   = rbeta(n_pp, 1, 1),
+  fit_id = "prior", source = "Prior"
+)
+
+post_emp <- emp_draws |>
+  select(fit_id, all_of(params_to_plot)) |>
+  mutate(source = "Posterior")
+
+bind_rows(
+  pivot_longer(prior_emp, all_of(params_to_plot), names_to = "parameter", values_to = "value"),
+  pivot_longer(post_emp,  all_of(params_to_plot), names_to = "parameter", values_to = "value")
+) |>
+  filter(source == "Posterior" | fit_id == "prior") |>
+  ggplot(aes(x = value, fill = source, colour = source)) +
+  geom_density(alpha = 0.35, linewidth = 0.6) +
+  facet_grid2(rows = vars(fit_id), cols = vars(parameter), scales = "free", independent = "y") +
+  scale_fill_manual(values   = c(Prior = "grey60", Posterior = "royalblue3")) +
+  scale_colour_manual(values = c(Prior = "grey40", Posterior = "black")) +
+  labs(title = "Empirical prior vs posterior by (subject, condition)",
+       x = NULL, y = "Density", fill = NULL, colour = NULL) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 3)) +
+  theme(legend.position = "bottom")
+```
+
+```{r empirical-ppc, fig.width=11, fig.height=4}
+ggplot(emp_predictions, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
+  geom_ribbon(aes(ymin = q25, ymax = q75), alpha = 0.25, fill = "steelblue") +
+  geom_line(aes(y = q50), colour = "steelblue", linewidth = 0.7) +
+  geom_line(aes(y = obs_acc), colour = "#E84855", linewidth = 0.7) +
+  facet_wrap(~fit_id, nrow = 1) +
+  labs(title = "Posterior predictive accuracy per (subject, condition) (red = observed)",
+       x = "Trial", y = "Cumulative accuracy") +
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.3)
+```
+
+```{r empirical-diagnostics}
+emp_diagnostics |>
+  group_by(fit_id) |>
+  summarise(n_divergent = sum(divergent__), .groups = "drop")
+```
+
+The GCM provides a reasonable account of session-1 learning in the alien game. For participants who reach high accuracy, the posterior attention weights concentrate on f1 (spots) and f3 (eyes on stalks): exactly the features that define the conjunction rule. This is encouraging: the model is picking up on the right information.
+
+That said, a similarity-based account is in tension with the structure of the task. The session-1 danger rule is a logical conjunction (f1 AND f3): a stimulus is dangerous only when both features are present. A pure similarity model has no representation of "and"; it averages weighted distances, which gives high similarity to stimuli sharing either feature with a remembered dangerous exemplar. In practice this means the model will tend to generalise danger too broadly early in learning, and may never fully suppress false alarms from stimuli that share only one rule feature. Parameter recovery is reasonable, though c and w show some confounding (high sensitivity can partially substitute for concentrated attention).
+
+A natural follow-up would be the rule-based model discussed in Riccardo's lecture, where participants explicitly represent the conjunction as a decision rule rather than computing pairwise similarities. The rule-based model predicts sharper decision boundaries, faster convergence, and no generalisation from partial matches: a contrast that could be tested directly against these GCM fits.
