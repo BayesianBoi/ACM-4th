@@ -9,7 +9,7 @@ set.seed(0)
 pacman::p_load(cmdstanr, tidyverse, cowplot, posterior, tidybayes, ggh4x, ggpmisc, priorsense)
 theme_set(theme_cowplot())
 
-### Sampler config -- one knob, used everywhere
+### Sampler config 
 n_warmup    <- 1000
 n_sampling  <- 1500
 n_chains    <- 4
@@ -82,6 +82,7 @@ rdirichlet <- function(n, alpha) {
 ```
 
 ```{r schedule}
+
 ### 32 binary stimuli, 96-trial training schedule (3 randomised cycles)
 all_stimuli <- expand.grid(f1=0:1, f2=0:1, f3=0:1, f4=0:1, f5=0:1) |> as_tibble()
 all_stimuli <- all_stimuli |>
@@ -98,11 +99,12 @@ make_schedule <- function(stimuli, n_cycles = 3, seed = 0) {
 schedule <- make_schedule(all_stimuli)
 obs_mat  <- as.matrix(select(schedule, f1:f5))
 cat_true <- schedule$danger
+
 ```
 
 ```{r sim-grid, fig.width=10}
 ### Simulation grid: attention regime x sensitivity x agent
-w_regimes <- list(
+w_conditions <- list(
   uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
   truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
   wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
@@ -111,13 +113,13 @@ c_values <- c(0.5, 2, 6)
 n_agents <- 5
 
 sim_grid <- expand_grid(
-  w_name = names(w_regimes),
+  w_name = names(w_conditions),
   c_val  = c_values,
   agent  = seq_len(n_agents)
 ) |>
   mutate(sim = pmap(list(w_name, c_val, agent), function(wn, cv, ag) {
     set.seed(ag)
-    gcm_simulate(w = w_regimes[[wn]], c = cv, bias = 0.5,
+    gcm_simulate(w = w_conditions[[wn]], c = cv, bias = 0.5,
                  obs = obs_mat, cat_feedback = cat_true)
   })) |>
   unnest(sim) |>
@@ -134,7 +136,7 @@ ggplot(sim_grid |>
   geom_line() +
   facet_wrap(~w_name, labeller = label_both) +
   scale_colour_brewer(palette = "Set1", name = "c") +
-  labs(title = "Mean cumulative accuracy by attention regime and sensitivity",
+  labs(title = "Mean cumulative accuracy by attention condition and sensitivity",
        x = "Trial", y = "Cumulative accuracy") +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
 ```
@@ -306,79 +308,6 @@ ggplot(yrep_ribbons, aes(x = trial)) +
        x = "Trial", y = "Cumulative accuracy")
 ```
 
-```{r param-recovery, fig.width=10}
-### Parameter recovery sweep
-w_settings <- list(
-  truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
-  uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
-  wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
-)
-c_settings   <- c(0.5, 2, 6)
-n_recov_reps <- 1
-
-recov_results <- list()
-
-for (wn in names(w_settings)) {
-  for (cv in c_settings) {
-    for (rep in seq_len(n_recov_reps)) {
-      cache_recov <- file.path("fits", paste0("recov_", wn, "_c", cv, "_r", rep, ".rds"))
-
-      set.seed(rep * 100)
-      ag <- gcm_simulate(w = w_settings[[wn]], c = cv, bias = 0.5,
-                         obs = obs_mat, cat_feedback = cat_true)
-
-      sdat <- list(
-        N_total = nrow(obs_mat), N_features = ncol(obs_mat),
-        y = ag$sim_response, obs = obs_mat, cat_feedback = cat_true,
-        prior_w_alpha = rep(1, 5), prior_log_c_mu = log(2),
-        prior_log_c_sigma = 1, prior_bias_alpha = 1, prior_bias_beta = 1,
-        run_diagnostics = 0
-      )
-
-      if (file.exists(cache_recov)) {
-        fit_r <- readRDS(cache_recov)
-      } else {
-        init_r <- tryCatch(
-          mod$pathfinder(data = sdat, refresh = 0)$draws(),
-          error = function(e) "random"
-        )
-        fit_r <- mod$sample(
-          data = sdat, init = init_r, seed = rep,
-          chains = n_chains, parallel_chains = n_chains,
-          iter_warmup = n_warmup, iter_sampling = n_sampling,
-          adapt_delta = adapt_delta, refresh = 0
-        )
-        fit_r$save_object(cache_recov)
-      }
-
-      dr <- as_draws_df(fit_r$draws(c("w", "c", "bias"))) |> as_tibble()
-
-      recov_results[[length(recov_results) + 1]] <- bind_rows(
-        tibble(parameter = paste0("w[", 1:5, "]"),
-               true_val  = w_settings[[wn]],
-               est_mean  = colMeans(select(dr, starts_with("w["))),
-               est_sd    = apply(select(dr, starts_with("w[")), 2, sd)),
-        tibble(parameter = c("c", "bias"),
-               true_val  = c(cv, 0.5),
-               est_mean  = c(mean(dr$c), mean(dr$bias)),
-               est_sd    = c(sd(dr$c),   sd(dr$bias)))
-      ) |> mutate(w_setting = wn, c_true = cv)
-    }
-  }
-}
-
-recov_df <- bind_rows(recov_results)
-
-ggplot(recov_df, aes(x = true_val, y = est_mean, colour = parameter)) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey30") +
-  geom_errorbar(aes(ymin = est_mean - est_sd, ymax = est_mean + est_sd),
-                width = 0, alpha = 0.5) +
-  geom_point(alpha = 0.9, size = 2) +
-  facet_wrap(~parameter, scales = "free") +
-  scale_colour_brewer(palette = "Set2", guide = "none") +
-  labs(title = "Parameter recovery", x = "True value", y = "Posterior mean +/- SD") +
-  theme_cowplot()
-```
 
 ```{r empirical-explore, fig.width=10}
 ### Empirical data: parse, assert rule, plot accuracy by condition
