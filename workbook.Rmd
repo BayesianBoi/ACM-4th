@@ -16,8 +16,6 @@ n_chains    <- 4
 adapt_delta <- 0.9
 ```
 
-Participants categorise alien stimuli described by 5 binary features (spots, slim legs, eyes on stalks, arms up, green) into a 2x2 danger x nutrition grid. In session 1 the danger rule is a conjunction: f1 AND f3 (spots AND eyes on stalks). We model the binary danger response with the Generalized Context Model (GCM): similarity-weighted memory of past exemplars, with learned attention weights over the 5 features. The model is a natural fit here because participants observe individual stimuli sequentially, and a similarity-based account lets us ask which features they actually attend to.
-
 ```{r gcm-helpers}
 ### GCM agent (R)
 distance <- function(vect1, vect2, w) {
@@ -188,7 +186,7 @@ true_w    <- c(0.45, 0.025, 0.45, 0.025, 0.05)
 true_c    <- 2
 true_bias <- 0.5
 
-set.seed(42)
+set.seed(42069)
 sim_agent <- gcm_simulate(w = true_w, c = true_c, bias = true_bias,
                           obs = obs_mat, cat_feedback = cat_true)
 
@@ -569,9 +567,3 @@ emp_diagnostics |>
   group_by(fit_id) |>
   summarise(n_divergent = sum(divergent__), .groups = "drop")
 ```
-
-The GCM provides a reasonable account of session-1 learning in the alien game. For participants who reach high accuracy, the posterior attention weights concentrate on f1 (spots) and f3 (eyes on stalks): exactly the features that define the conjunction rule. This is encouraging: the model is picking up on the right information.
-
-That said, a similarity-based account is in tension with the structure of the task. The session-1 danger rule is a logical conjunction (f1 AND f3): a stimulus is dangerous only when both features are present. A pure similarity model has no representation of "and"; it averages weighted distances, which gives high similarity to stimuli sharing either feature with a remembered dangerous exemplar. In practice this means the model will tend to generalise danger too broadly early in learning, and may never fully suppress false alarms from stimuli that share only one rule feature. Parameter recovery is reasonable, though c and w show some confounding (high sensitivity can partially substitute for concentrated attention).
-
-A natural follow-up would be the rule-based model discussed in Riccardo's lecture, where participants explicitly represent the conjunction as a decision rule rather than computing pairwise similarities. The rule-based model predicts sharper decision boundaries, faster convergence, and no generalisation from partial matches: a contrast that could be tested directly against these GCM fits.
