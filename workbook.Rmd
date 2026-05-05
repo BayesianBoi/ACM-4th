@@ -510,7 +510,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
 }
 ```
 
-```{r empirical-prior-post, fig.width=13, fig.height=6}
+```{r empirical-prior-post, fig.width=13, fig.height=10}
 ### Per-fit prior-posterior densities
 params_to_plot <- c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "log_c", "bias")
 
@@ -568,7 +568,7 @@ bind_rows(
   theme(legend.position = "bottom")
 ```
 
-```{r empirical-ppc, fig.width=11, fig.height=4}
+```{r empirical-ppc, fig.width=12, fig.height=6}
 ggplot(emp_predictions, aes(x = trial)) +
   geom_ribbon(aes(ymin = q05, ymax = q95),
               alpha = 0.15,
