@@ -207,9 +207,7 @@ prior_ribbons <- prior_sims |>
   group_by(trial) |>
   summarise(
     q05 = quantile(cum_acc, 0.05),
-    q25 = quantile(cum_acc, 0.25),
     q50 = quantile(cum_acc, 0.50),
-    q75 = quantile(cum_acc, 0.75),
     q95 = quantile(cum_acc, 0.95),
     .groups = "drop"
   )
@@ -217,9 +215,6 @@ prior_ribbons <- prior_sims |>
 ggplot(prior_ribbons, aes(x = trial)) +
   geom_ribbon(aes(ymin = q05, ymax = q95),
               alpha = 0.15,
-              fill = "steelblue") +
-  geom_ribbon(aes(ymin = q25, ymax = q75),
-              alpha = 0.25,
               fill = "steelblue") +
   geom_line(aes(y = q50),
             colour = "steelblue",
@@ -358,9 +353,7 @@ yrep_ribbons <- yrep_cum |>
   group_by(trial) |>
   summarise(
     q05 = quantile(cum_acc, 0.05),
-    q25 = quantile(cum_acc, 0.25),
     q50 = quantile(cum_acc, 0.50),
-    q75 = quantile(cum_acc, 0.75),
     q95 = quantile(cum_acc, 0.95),
     .groups = "drop"
   )
@@ -368,9 +361,6 @@ yrep_ribbons <- yrep_cum |>
 ggplot(yrep_ribbons, aes(x = trial)) +
   geom_ribbon(aes(ymin = q05, ymax = q95),
               alpha = 0.15,
-              fill = "steelblue") +
-  geom_ribbon(aes(ymin = q25, ymax = q75),
-              alpha = 0.25,
               fill = "steelblue") +
   geom_line(aes(y = q50),
             colour = "steelblue",
@@ -435,7 +425,7 @@ subj_cond_pairs <- alien_data_session1 |>
   distinct(subject, condition) |>
   arrange(subject, condition)
 
-pairs_to_fit <- head(subj_cond_pairs, 5)
+pairs_to_fit <- head(subj_cond_pairs, 6)
 
 emp_draws       <- tibble()
 emp_predictions <- tibble()
@@ -503,9 +493,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
     group_by(fit_id, trial) |>
     summarise(
       q05 = quantile(cum_acc, 0.05),
-      q25 = quantile(cum_acc, 0.25),
       q50 = quantile(cum_acc, 0.50),
-      q75 = quantile(cum_acc, 0.75),
       q95 = quantile(cum_acc, 0.95),
       .groups = "drop"
     ) |>
@@ -585,9 +573,6 @@ ggplot(emp_predictions, aes(x = trial)) +
   geom_ribbon(aes(ymin = q05, ymax = q95),
               alpha = 0.15,
               fill = "steelblue") +
-  geom_ribbon(aes(ymin = q25, ymax = q75),
-              alpha = 0.25,
-              fill = "steelblue") +
   geom_line(aes(y = q50),
             colour = "steelblue",
             linewidth = 0.7) +
@@ -595,7 +580,7 @@ ggplot(emp_predictions, aes(x = trial)) +
             colour = "#E84855",
             linewidth = 0.7) +
   facet_wrap( ~ fit_id, nrow = 1) +
-  labs(title = "Posterior predictive accuracy per (subject, condition) (red = observed)", x = "Trial", y = "Cumulative accuracy") +
+  labs(title = "Posterior predictive accuracy by subject and condition (red = observed, blue = predicted)", x = "Trial", y = "Cumulative accuracy") +
   geom_hline(yintercept = 0.5,
              linetype = "dashed",
              alpha = 0.3)
