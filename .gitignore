@@ -1,4 +1,5 @@
 docs/
-fits/
+fits/*
 stan/GCM
+.Rhistory
 .DS_Store
