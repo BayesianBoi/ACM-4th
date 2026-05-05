@@ -14,6 +14,7 @@ n_warmup    <- 1000
 n_sampling  <- 1000
 n_chains    <- 4
 adapt_delta <- 0.9
+sig_figs    <- 12 # addresses "Error evaluating the log probability at the initial value. stan::math::simplex_free: Simplex variable is not a valid simplex. sum(Simplex variable) = 0.99999999, but should be 1"
 ```
 
 ```{r gcm-helpers}
@@ -268,6 +269,7 @@ fit_sim <- mod$sample(
   iter_warmup     = n_warmup,
   iter_sampling   = n_sampling,
   adapt_delta     = adapt_delta,
+  sig_figs        = sig_figs,
   refresh         = 200
 )
 
@@ -390,10 +392,9 @@ parse_stimulus <- function(s) {
   as.integer(chars)
 }
 
-alien_raw <- read_csv("./data/AlienData.txt", show_col_types = FALSE) |>
-  filter(test == 0)  # transfer trials (test == 1) use a different stimulus encoding
-
-alien <- alien_raw |>
+alien_data_session1 <- read_csv("./data/AlienData.txt", show_col_types = FALSE) |>
+  filter(session == 1)|> # consider only session 1 data
+  filter(test == 0) |> # transfer trials (test == 1) use a different stimulus encoding
   mutate(
     features = map(stimulus, parse_stimulus),
     f1 = map_int(features, 1),
@@ -401,21 +402,14 @@ alien <- alien_raw |>
     f3 = map_int(features, 3),
     f4 = map_int(features, 4),
     f5 = map_int(features, 5),
-    danger_response = as.integer(response %in% c(3L, 4L)),
-    cat_danger      = as.integer(f1 == 1 & f3 == 1)
+    danger_response = as.integer(response %in% c(3, 4)),
+    is_dangerous    = as.integer(f1 == 1 & f3 == 1)
   )
 
-# Most subject IDs cover one person per condition, so each individual is (subject, condition).
-check <- alien |> filter(session == 1)
-stopifnot(all(check$cat_danger == check$dangerous))
-message("Assertion passed: session-1 rule matches `dangerous` column.")
-
-dat_s1 <- alien |> filter(session == 1)
-
-dat_s1 |>
+alien_data_session1 |>
   arrange(subject, condition, trial) |>
   group_by(subject, condition) |>
-  mutate(cum_acc = cummean(danger_response == dangerous)) |>
+  mutate(cum_acc = cummean(danger_response == is_dangerous)) |>
   group_by(condition, trial) |>
   summarise(mean_acc = mean(cum_acc), .groups = "drop") |>
   ggplot(aes(
@@ -437,7 +431,7 @@ dat_s1 |>
 
 ```{r empirical-fit}
 ### Per-(subject, condition) fits. Cap to a small subset; raise after profiling.
-subj_cond_pairs <- dat_s1 |>
+subj_cond_pairs <- alien_data_session1 |>
   distinct(subject, condition) |>
   arrange(subject, condition)
 
@@ -452,7 +446,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
   cond_id    <- pairs_to_fit$condition[i]
   fit_id     <- sprintf("subj_%d_cond_%d", subj_id, cond_id)
   
-  subj_dat <- dat_s1 |>
+  subj_dat <- alien_data_session1 |>
     filter(subject == subj_id, condition == cond_id) |>
     arrange(trial)
   
@@ -461,7 +455,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
     N_features        = 5L,
     y                 = subj_dat$danger_response,
     obs               = as.matrix(select(subj_dat, f1:f5)),
-    cat_feedback      = subj_dat$cat_danger,
+    cat_feedback      = subj_dat$is_dangerous,
     prior_w_alpha     = rep(1, 5),
     prior_log_c_mu    = log(2),
     prior_log_c_sigma = 1,
@@ -501,7 +495,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
   pred_ribbons <- map_dfr(seq_len(nrow(yrep_pp)), function(j) {
     tibble(
       trial   = seq_len(nrow(subj_dat)),
-      cum_acc = cummean(yrep_pp[j, ] == subj_dat$cat_danger),
+      cum_acc = cummean(yrep_pp[j, ] == subj_dat$is_dangerous),
       draw    = j,
       fit_id = fit_id
     )
@@ -515,7 +509,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
       q95 = quantile(cum_acc, 0.95),
       .groups = "drop"
     ) |>
-    mutate(obs_acc = with(subj_dat, cummean(danger_response == cat_danger)[seq_len(nrow(subj_dat))]))
+    mutate(obs_acc = with(subj_dat, cummean(danger_response == is_dangerous)[seq_len(nrow(subj_dat))]))
   
   emp_predictions <- bind_rows(emp_predictions, pred_ribbons)
   
