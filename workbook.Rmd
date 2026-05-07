@@ -17,15 +17,13 @@ adapt_delta <- 0.9
 sig_figs    <- 12 # addresses "Error evaluating the log probability at the initial value. stan::math::simplex_free: Simplex variable is not a valid simplex. sum(Simplex variable) = 0.99999999, but should be 1"
 ```
 
-```{r gcm-helpers}
-### GCM agent (R)
+```{r}
+### GCM agent
 distance <- function(vect1, vect2, w) {
-  sum(w * abs(vect1 - vect2))
-}
+  sum(w * abs(vect1 - vect2))}
 
 similarity <- function(dist_val, c) {
-  exp(-c * dist_val)
-}
+  exp(-c * dist_val)}
 
 gcm_simulate <- function(w,
                          # attention weights (sums to 1)
@@ -48,20 +46,18 @@ gcm_simulate <- function(w,
   memory_cat <- numeric(0)
   
   for (i in seq_len(ntrials)) {
-    if (!quiet && i %% 20 == 0)
-      cat("Simulating trial:", i, "\n")
+  if (!quiet && i %% 20 == 0) cat("Simulating trial:", i, "\n")
     
     current_stim <- as.numeric(obs[i, ])
     n_mem        <- nrow(memory_obs)
     has_cat0     <- any(memory_cat == 0)
     has_cat1     <- any(memory_cat == 1)
     
-    if (n_mem == 0 || !has_cat0 || !has_cat1) {
-      prob_cat1[i] <- bias
-    } else {
-      sims <- vapply(seq_len(n_mem), function(e) {
-        similarity(distance(current_stim, memory_obs[e, ], w), c)
-      }, numeric(1))
+  if (n_mem == 0 || !has_cat0 || !has_cat1) {
+      prob_cat1[i] <- bias} 
+      
+  else {sims <- vapply(seq_len(n_mem), function(e) {
+        similarity(distance(current_stim, memory_obs[e, ], w), c)}, numeric(1))
       
       # mean over sum: kills category-frequency bias when one category fills memory
       m1  <- mean(sims[memory_cat == 1])
@@ -73,46 +69,38 @@ gcm_simulate <- function(w,
         num / den
       else
         bias
-      prob_cat1[i] <- pmax(1e-9, pmin(1 - 1e-9, prob_cat1[i]))
-    }
+      prob_cat1[i] <- pmax(1e-9, pmin(1 - 1e-9, prob_cat1[i]))}
     
-    sim_response[i] <- rbinom(1, 1, prob_cat1[i])
+  sim_response[i] <- rbinom(1, 1, prob_cat1[i])
     
-    memory_obs <- rbind(memory_obs, current_stim)
-    memory_cat <- c(memory_cat, cat_feedback[i])
-  }
+  memory_obs <- rbind(memory_obs, current_stim)
+  memory_cat <- c(memory_cat, cat_feedback[i])}
   
-  tibble(prob_cat1 = prob_cat1, sim_response = sim_response)
-}
+  tibble(prob_cat1 = prob_cat1, sim_response = sim_response)}
 
 rdirichlet <- function(n, alpha) {
   x <- matrix(rgamma(n * length(alpha), alpha), nrow = n, byrow = TRUE)
-  x / rowSums(x)
-}
+  x / rowSums(x)}
+
 ```
 
-```{r schedule}
+```{r}
 
 ### 32 binary stimuli, 96-trial training schedule (3 randomised cycles)
-all_stimuli <- expand.grid(
-  f1 = 0:1,
+all_stimuli <- expand.grid( 
+  f1 = 0:1, ## Different features 
   f2 = 0:1,
   f3 = 0:1,
   f4 = 0:1,
-  f5 = 0:1
-) |> as_tibble()
-all_stimuli <- all_stimuli |>
-  mutate(danger = as.integer(f1 == 1 & f3 == 1))
+  f5 = 0:1) |> as_tibble()
 
-make_schedule <- function(stimuli,
-                          n_cycles = 3,
-                          seed = 0) {
-  set.seed(seed)
-  map_dfr(seq_len(n_cycles), function(cycle) {
-    stimuli[sample(nrow(stimuli)), ] |>
-      mutate(cycle = cycle,
-             trial = row_number() + (cycle - 1) * nrow(stimuli))
-  })
+all_stimuli <- all_stimuli |> mutate(danger = as.integer(f1 == 1 & f3 == 1))
+
+make_schedule <- function(stimuli, n_cycles = 3, seed = 0) 
+  {set.seed(seed) 
+  map_dfr(seq_len(n_cycles), 
+  
+  function(cycle) {stimuli[sample(nrow(stimuli)), ] |> mutate(cycle = cycle, trial = row_number() + (cycle - 1) * nrow(stimuli))})
 }
 
 schedule <- make_schedule(all_stimuli)
@@ -121,23 +109,22 @@ cat_true <- schedule$danger
 
 ```
 
-```{r sim-grid, fig.width=10}
-### Simulation grid: attention regime x sensitivity x agent
+```{r}
+### Simulation grid: attention conditions, sensitivity and agent
 w_conditions <- list(
   uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
   truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
   wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
 )
-c_values <- c(0.5, 2, 6)
+c_values <- c(0.2, 1, 10) ## range over low to high 
 n_agents <- 5
 
 sim_grid <- expand_grid(
   w_name = names(w_conditions),
   c_val  = c_values,
-  agent  = seq_len(n_agents)
-) |>
-  mutate(sim = pmap(list(w_name, c_val, agent), function(wn, cv, ag) {
-    set.seed(ag)
+  agent  = seq_len(n_agents)) |>
+  mutate(sim = pmap(list(w_name, c_val, agent), function(wn, cv, ag) 
+    {set.seed(ag) 
     gcm_simulate(
       w = w_conditions[[wn]],
       c = cv,
@@ -148,44 +135,32 @@ sim_grid <- expand_grid(
   })) |>
   unnest(sim) |>
   group_by(w_name, c_val, agent) |>
-  mutate(
-    trial = row_number(),
-    correct = sim_response == cat_true,
-    cum_acc = cummean(correct)
-  ) |>
+  mutate(trial = row_number(), correct = sim_response == cat_true, cum_acc = cummean(correct)) |>
   ungroup()
 
-ggplot(
-  sim_grid |>
-    group_by(w_name, c_val, trial) |>
+## Plotting the simulation results 
+
+ggplot(sim_grid |> group_by(w_name, c_val, trial) |>
     summarise(mean_acc = mean(cum_acc), .groups = "drop"),
-  aes(
-    x = trial,
-    y = mean_acc,
-    colour = factor(c_val)
-  )
-) +
+  aes(x = trial, y = mean_acc, colour = factor(c_val))) +
   geom_line() +
   facet_wrap( ~ w_name, labeller = label_both) +
   scale_colour_brewer(palette = "Set1", name = "c") +
   labs(title = "Mean cumulative accuracy by attention condition and sensitivity", x = "Trial", y = "Cumulative accuracy") +
-  geom_hline(yintercept = 0.5,
-             linetype = "dashed",
-             alpha = 0.4)
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
+
 ```
 
-```{r prior-pred, fig.width=9}
-### Prior predictive ribbons
+```{r}
+### Prior predictive check 
+
 n_prior <- 500
 
 prior_draws <- tibble(
   draw  = seq_len(n_prior),
-  w     = map(seq_len(n_prior), ~ as.numeric(rdirichlet(1, rep(
-    1, 5
-  )))),
+  w     = map(seq_len(n_prior), ~ as.numeric(rdirichlet(1, rep(1, 5)))),
   log_c = rnorm(n_prior, log(2), 1),
-  bias  = rbeta(n_prior, 1, 1)
-) |> mutate(c = exp(log_c))
+  bias  = rbeta(n_prior, 1, 1)) |> mutate(c = exp(log_c))
 
 prior_sims <- prior_draws |>
   mutate(sim = pmap(list(w, c, bias), function(wv, cv, bv) {
@@ -195,13 +170,13 @@ prior_sims <- prior_draws |>
       bias = bv,
       obs = obs_mat,
       cat_feedback = cat_true
-    )
-  })) |>
+    )})) |>
   unnest(sim) |>
   group_by(draw) |>
   mutate(trial = row_number(),
-         cum_acc = cummean(sim_response == cat_true)) |>
-  ungroup()
+         cum_acc = cummean(sim_response == cat_true)) |> ungroup()
+
+## Plotting the prior predictive distribution of cumulative accuracy (5/50/95 percentiles) 
 
 prior_ribbons <- prior_sims |>
   group_by(trial) |>
@@ -209,32 +184,26 @@ prior_ribbons <- prior_sims |>
     q05 = quantile(cum_acc, 0.05),
     q50 = quantile(cum_acc, 0.50),
     q95 = quantile(cum_acc, 0.95),
-    .groups = "drop"
-  )
+    .groups = "drop")
 
 ggplot(prior_ribbons, aes(x = trial)) +
-  geom_ribbon(aes(ymin = q05, ymax = q95),
-              alpha = 0.15,
-              fill = "steelblue") +
-  geom_line(aes(y = q50),
-            colour = "steelblue",
-            linewidth = 0.8) +
-  geom_hline(yintercept = 0.5,
-             linetype = "dashed",
-             alpha = 0.4) +
-  labs(title = "Prior predictive: cumulative accuracy (5/25/50/75/95 percentiles)", x = "Trial", y = "Cumulative accuracy")
+  geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
+  geom_line(aes(y = q50), colour = "steelblue", linewidth = 0.8) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4) +
+  labs(title = "Prior predictive: cumulative accuracy (5/50/95 percentiles)", x = "Trial", y = "Cumulative accuracy")
+
 ```
 
-```{r stan-sim-fit}
+```{r}
+
 ### Fit Stan to one simulated agent
 mod <- cmdstan_model("./stan/GCM.stan")
 
-true_w    <- c(0.45, 0.025, 0.45, 0.025, 0.05)
-true_c    <- 2
+true_w    <- c(0.45, 0.025, 0.45, 0.025, 0.05) ## the true f1f3 attention condition
+true_c    <- 1
 true_bias <- 0.5
 
-sim_agent <- gcm_simulate(w = true_w, c = true_c, bias = true_bias,
-                          obs = obs_mat, cat_feedback = cat_true)
+sim_agent <- gcm_simulate(w = true_w, c = true_c, bias = true_bias, obs = obs_mat, cat_feedback = cat_true)
 
 stan_data_sim <- list(
   N_total           = nrow(obs_mat),
@@ -247,17 +216,10 @@ stan_data_sim <- list(
   prior_log_c_sigma = 1,
   prior_bias_alpha  = 1,
   prior_bias_beta   = 1,
-  run_diagnostics   = 1
-)
+  run_diagnostics   = 1)
 
-
-init_sim <- tryCatch(
-  mod$pathfinder(data = stan_data_sim, refresh = 0)$draws(),
-  error = function(e) "random"
-)
 fit_sim <- mod$sample(
   data            = stan_data_sim,
-  init            = init_sim,
   seed            = 0,
   chains          = n_chains,
   parallel_chains = n_chains,
@@ -265,17 +227,14 @@ fit_sim <- mod$sample(
   iter_sampling   = n_sampling,
   adapt_delta     = adapt_delta,
   sig_figs        = sig_figs,
-  refresh         = 200
-)
+  refresh         = 200)
 
-fit_sim$summary(c("w", "log_c", "c", "bias")) |>
-  select(variable, mean, sd, rhat, ess_bulk, ess_tail)
 ```
 
-```{r prior-post-plot, fig.width=12, fig.height=8}
+```{r}
+
 ### Prior-posterior update on the simulated agent
-post_draws_sim <- as_draws_df(fit_sim$draws(c("w", "log_c", "c", "bias"))) |>
-  as_tibble()
+post_draws_sim <- as_draws_df(fit_sim$draws(c("w", "log_c", "c", "bias"))) |> as_tibble()
 
 # w columns must come from the same Dirichlet draw, not independent column samples
 set.seed(0)
@@ -289,20 +248,14 @@ prior_df <- tibble(
   `w[5]` = w_prior_mat[, 5],
   log_c  = rnorm(n_post, log(2), 1),
   bias   = rbeta(n_post, 1, 1),
-  source = "Prior"
-) |> mutate(c = exp(log_c))
+  source = "Prior") |> mutate(c = exp(log_c))
 
-post_df <- post_draws_sim |>
-  select(`w[1]`, `w[2]`, `w[3]`, `w[4]`, `w[5]`, log_c, c, bias) |>
-  mutate(source = "Posterior")
+post_df <- post_draws_sim |> select(`w[1]`, `w[2]`, `w[3]`, `w[4]`, `w[5]`, log_c, c, bias) |> mutate(source = "Posterior")
 
-truth_df <- tibble(
-  parameter = c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "log_c", "c", "bias"),
-  truth     = c(true_w, log(true_c), true_c, true_bias)
-)
+truth_df <- tibble(parameter = c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "log_c", "c", "bias"),
+  truth = c(true_w, log(true_c), true_c, true_bias))
 
-combined <- bind_rows(prior_df, post_df) |>
-  pivot_longer(-source, names_to = "parameter", values_to = "value")
+combined <- bind_rows(prior_df, post_df) |> pivot_longer(-source, names_to = "parameter", values_to = "value")
 
 ggplot(combined, aes(x = value, fill = source, colour = source)) +
   geom_density(alpha = 0.35, linewidth = 0.7) +
@@ -311,8 +264,7 @@ ggplot(combined, aes(x = value, fill = source, colour = source)) +
     aes(xintercept = truth),
     linetype = "dashed",
     colour = "#E84855",
-    linewidth = 0.7
-  ) +
+    linewidth = 0.7) +
   facet_wrap( ~ parameter, scales = "free", ncol = 4) +
   scale_fill_manual(values   = c(Prior = "grey60", Posterior = "royalblue3")) +
   scale_colour_manual(values = c(Prior = "grey40", Posterior = "black")) +
@@ -322,32 +274,31 @@ ggplot(combined, aes(x = value, fill = source, colour = source)) +
     y = "Density",
     fill = NULL,
     colour = NULL
-  ) +
-  theme(legend.position = "bottom")
+  ) + theme(legend.position = "bottom")
+
 ```
 
-```{r post-pred-check, fig.width=9}
-### Posterior predictive check (yrep simulated in R from prob_cat1)
+
+
+```{r}
+
+### Posterior predictive check
 prob_draws <- as_draws_matrix(fit_sim$draws("prob_cat1"))
 
-n_yrep   <- 200
-idx      <- sample(nrow(prob_draws), n_yrep)
-yrep_mat <- apply(prob_draws[idx, ], c(1, 2), function(p)
-  rbinom(1, 1, p))
+n_yrep   <- 200 ## Number of sims to draw from the posterior predictive distribution
+idx <- sample(nrow(prob_draws), n_yrep)
+yrep_mat <- apply(prob_draws[idx, ], c(1, 2), function(p) rbinom(1, 1, p))
 
 obs_cum  <- tibble(
   trial = seq_len(nrow(obs_mat)),
   cum_acc = cummean(sim_agent$sim_response == cat_true),
-  source = "Observed"
-)
+  source = "Observed")
 
 yrep_cum <- map_dfr(seq_len(n_yrep), function(i) {
   tibble(
     trial   = seq_len(nrow(obs_mat)),
     cum_acc = cummean(yrep_mat[i, ] == cat_true),
-    draw    = i
-  )
-})
+    draw    = i)})
 
 yrep_ribbons <- yrep_cum |>
   group_by(trial) |>
@@ -355,34 +306,30 @@ yrep_ribbons <- yrep_cum |>
     q05 = quantile(cum_acc, 0.05),
     q50 = quantile(cum_acc, 0.50),
     q95 = quantile(cum_acc, 0.95),
-    .groups = "drop"
-  )
+    .groups = "drop")
 
 ggplot(yrep_ribbons, aes(x = trial)) +
   geom_ribbon(aes(ymin = q05, ymax = q95),
-              alpha = 0.15,
-              fill = "steelblue") +
-  geom_line(aes(y = q50),
-            colour = "steelblue",
-            linewidth = 0.8) +
+              alpha = 0.15, fill = "steelblue") +
+  geom_line(aes(y = q50),colour = "steelblue", linewidth = 0.8) +
   geom_line(
     data = obs_cum,
     aes(y = cum_acc),
     colour = "#E84855",
-    linewidth = 0.8
-  ) +
-  labs(title = "Posterior predictive check (red = observed, blue = yrep)", x = "Trial", y = "Cumulative accuracy")
+    linewidth = 0.8) + labs(title = "Posterior predictive check (red = observed, blue = yrep)", x = "Trial", y = "Cumulative accuracy")
+
 ```
 
 
-```{r empirical-explore, fig.width=10}
-### Empirical data: parse, assert rule, plot accuracy by condition
+```{r}
+### Empirical data -- get the jpeg parsing 
 parse_stimulus <- function(s) {
   chars <- strsplit(sub("\\.jpg$", "", s), "")[[1]]
-  as.integer(chars)
-}
+  as.integer(chars)}
 
-alien_data_session1 <- read_csv("./data/AlienData.txt", show_col_types = FALSE) |>
+## Alien it up 
+
+alien_data <- read_csv("./data/AlienData.txt", show_col_types = FALSE) |>
   filter(session == 1)|> # consider only session 1 data
   filter(test == 0) |> # transfer trials (test == 1) use a different stimulus encoding
   mutate(
@@ -393,75 +340,60 @@ alien_data_session1 <- read_csv("./data/AlienData.txt", show_col_types = FALSE) 
     f4 = map_int(features, 4),
     f5 = map_int(features, 5),
     danger_response = as.integer(response %in% c(3, 4)),
-    is_dangerous    = as.integer(f1 == 1 & f3 == 1)
-  )
+    is_dangerous    = as.integer(f1 == 1 & f3 == 1))
 
-alien_data_session1 |>
+## Plot empirical cumulative accuracy by condition (averaged over subjects)
+
+alien_data |>
   arrange(subject, condition, trial) |>
   group_by(subject, condition) |>
   mutate(cum_acc = cummean(danger_response == is_dangerous)) |>
   group_by(condition, trial) |>
   summarise(mean_acc = mean(cum_acc), .groups = "drop") |>
-  ggplot(aes(
-    x = trial,
-    y = mean_acc,
-    colour = factor(condition)
-  )) +
+  ggplot(aes(x = trial, y = mean_acc, colour = factor(condition))) +
   geom_line(linewidth = 0.8) +
   scale_colour_brewer(
     palette = "Set1",
     name = "Condition",
-    labels = c("1" = "Dyad", "2" = "Individual")
-  ) +
+    labels = c("1" = "Dyad", "2" = "Individual")) +
   labs(title = "Empirical cumulative accuracy by condition (session 1)", x = "Trial", y = "Cumulative accuracy") +
-  geom_hline(yintercept = 0.5,
-             linetype = "dashed",
-             alpha = 0.4)
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
 ```
 
-```{r empirical-fit}
-### Per-(subject, condition) fits. Cap to a small subset; raise after profiling.
-subj_cond_pairs <- alien_data_session1 |>
-  distinct(subject, condition) |>
-  arrange(subject, condition)
+```{r}
 
-pairs_to_fit <- head(subj_cond_pairs, 6)
+### itting to a subset of the empirical data 
+subj_cond_pairs <- alien_data |> distinct(subject, condition) |> arrange(subject, condition)
 
-emp_draws       <- tibble()
+pairs_to_fit <- head(subj_cond_pairs, 6) ## can adjust potentially 
+
+emp_draws <- tibble()
 emp_predictions <- tibble()
 emp_diagnostics <- tibble()
 
 for (i in seq_len(nrow(pairs_to_fit))) {
-  subj_id    <- pairs_to_fit$subject[i]
-  cond_id    <- pairs_to_fit$condition[i]
-  fit_id     <- sprintf("subj_%d_cond_%d", subj_id, cond_id)
+  subj_id <- pairs_to_fit$subject[i]
+  cond_id <- pairs_to_fit$condition[i]
+  fit_id  <- sprintf("subj_%d_cond_%d", subj_id, cond_id)
   
-  subj_dat <- alien_data_session1 |>
-    filter(subject == subj_id, condition == cond_id) |>
-    arrange(trial)
+  subj_dat <- alien_data |> filter(subject == subj_id, condition == cond_id) |> arrange(trial)
   
   sdat <- list(
-    N_total           = nrow(subj_dat),
-    N_features        = 5L,
-    y                 = subj_dat$danger_response,
-    obs               = as.matrix(select(subj_dat, f1:f5)),
-    cat_feedback      = subj_dat$is_dangerous,
-    prior_w_alpha     = rep(1, 5),
-    prior_log_c_mu    = log(2),
+    N_total = nrow(subj_dat),
+    N_features = 5L,
+    y = subj_dat$danger_response,
+    obs = as.matrix(select(subj_dat, f1:f5)),
+    cat_feedback = subj_dat$is_dangerous,
+    prior_w_alpha = rep(1, 5),
+    prior_log_c_mu = log(2),
     prior_log_c_sigma = 1,
-    prior_bias_alpha  = 1,
-    prior_bias_beta   = 1,
-    run_diagnostics   = 1
-  )
+    prior_bias_alpha = 1,
+    prior_bias_beta = 1,
+    run_diagnostics = 1)
   
-  init_fn <- tryCatch(
-    mod$pathfinder(data = sdat, refresh = 0)$draws(),
-    error = function(e)
-      "random"
-  )
+
   fit <- mod$sample(
     data            = sdat,
-    init            = init_fn,
     seed            = 0,
     chains          = n_chains,
     parallel_chains = n_chains,
@@ -471,47 +403,44 @@ for (i in seq_len(nrow(pairs_to_fit))) {
     refresh         = 0
   )
   
+  ## get draws, posterior predictive sims, and diagnostics for fit and store in respective data frames
+  
   dr <- as_draws_df(fit$draws()) |> as_tibble() |>
-    mutate(fit_id = fit_id,
-           subject = subj_id,
-           condition = cond_id)
-  emp_draws <- bind_rows(emp_draws, dr)
+    mutate(fit_id = fit_id, subject = subj_id, condition = cond_id)
+    emp_draws <- bind_rows(emp_draws, dr)
   
   prob_mat <- as_draws_matrix(fit$draws("prob_cat1"))
   idx_pp  <- sample(nrow(prob_mat), 200)
-  yrep_pp <- apply(prob_mat[idx_pp, ], c(1, 2), function(p)
-    rbinom(1, 1, p))
+  yrep_pp <- apply(prob_mat[idx_pp, ], c(1, 2), function(p) rbinom(1, 1, p))
   
   pred_ribbons <- map_dfr(seq_len(nrow(yrep_pp)), function(j) {
     tibble(
       trial   = seq_len(nrow(subj_dat)),
       cum_acc = cummean(yrep_pp[j, ] == subj_dat$is_dangerous),
       draw    = j,
-      fit_id = fit_id
-    )
-  }) |>
+      fit_id = fit_id )}) |>
     group_by(fit_id, trial) |>
     summarise(
       q05 = quantile(cum_acc, 0.05),
       q50 = quantile(cum_acc, 0.50),
       q95 = quantile(cum_acc, 0.95),
-      .groups = "drop"
-    ) |>
+      .groups = "drop") |>
     mutate(obs_acc = with(subj_dat, cummean(danger_response == is_dangerous)[seq_len(nrow(subj_dat))]))
   
   emp_predictions <- bind_rows(emp_predictions, pred_ribbons)
   
   diag_df <- fit$sampler_diagnostics() |> as_draws_df() |> as_tibble() |>
     select(divergent__, .chain, .iteration, .draw) |>
-    mutate(fit_id = fit_id,
-           subject = subj_id,
-           condition = cond_id)
-  emp_diagnostics <- bind_rows(emp_diagnostics, diag_df)
-}
+    mutate(fit_id = fit_id, subject = subj_id, condition = cond_id)
+    emp_diagnostics <- bind_rows(emp_diagnostics, diag_df)}
+
+
 ```
 
-```{r empirical-prior-post, fig.width=13, fig.height=6}
-### Per-fit prior-posterior densities
+```{r}
+
+### Plotting prior vs posterior for the empirical fits (by subject and condition)
+
 params_to_plot <- c("w[1]", "w[2]", "w[3]", "w[4]", "w[5]", "log_c", "bias")
 
 n_pp <- 6000
@@ -525,36 +454,27 @@ prior_emp <- tibble(
   log_c  = rnorm(n_pp, log(2), 1),
   bias   = rbeta(n_pp, 1, 1),
   fit_id = "prior",
-  source = "Prior"
-)
+  source = "Prior")
 
-post_emp <- emp_draws |>
-  select(fit_id, all_of(params_to_plot)) |>
-  mutate(source = "Posterior")
+post_emp <- emp_draws |> select(fit_id, all_of(params_to_plot)) |> mutate(source = "Posterior")
+
+## Plotting
 
 bind_rows(
   pivot_longer(
     prior_emp,
     all_of(params_to_plot),
     names_to = "parameter",
-    values_to = "value"
-  ),
+    values_to = "value"),
   pivot_longer(
     post_emp,
     all_of(params_to_plot),
     names_to = "parameter",
-    values_to = "value"
-  )
-) |>
+    values_to = "value")) |>
   filter(source == "Posterior" | fit_id == "prior") |>
   ggplot(aes(x = value, fill = source, colour = source)) +
   geom_density(alpha = 0.35, linewidth = 0.6) +
-  facet_grid2(
-    rows = vars(fit_id),
-    cols = vars(parameter),
-    scales = "free",
-    independent = "y"
-  ) +
+  facet_grid2(rows = vars(fit_id), cols = vars(parameter), scales = "free", independent = "y") +
   scale_fill_manual(values   = c(Prior = "grey60", Posterior = "royalblue3")) +
   scale_colour_manual(values = c(Prior = "grey40", Posterior = "black")) +
   labs(
@@ -562,32 +482,35 @@ bind_rows(
     x = NULL,
     y = "Density",
     fill = NULL,
-    colour = NULL
-  ) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 3)) +
-  theme(legend.position = "bottom")
+    colour = NULL ) + scale_y_continuous(breaks = scales::pretty_breaks(n = 3)) + theme(legend.position = "bottom")
+
+
 ```
 
-```{r empirical-ppc, fig.width=11, fig.height=4}
-ggplot(emp_predictions, aes(x = trial)) +
-  geom_ribbon(aes(ymin = q05, ymax = q95),
-              alpha = 0.15,
-              fill = "steelblue") +
-  geom_line(aes(y = q50),
-            colour = "steelblue",
-            linewidth = 0.7) +
-  geom_line(aes(y = obs_acc),
-            colour = "#E84855",
-            linewidth = 0.7) +
+```{r}
+
+## Posterior predictive empirical
+
+ggplot(emp_predictions, aes(x = trial)) + 
+  geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
+  geom_line(aes(y = q50), colour = "steelblue",linewidth = 0.7) +
+  geom_line(aes(y = obs_acc), colour = "#E84855", linewidth = 0.7) +
   facet_wrap( ~ fit_id, nrow = 1) +
   labs(title = "Posterior predictive accuracy by subject and condition (red = observed, blue = predicted)", x = "Trial", y = "Cumulative accuracy") +
-  geom_hline(yintercept = 0.5,
-             linetype = "dashed",
-             alpha = 0.3)
+  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.3)
+
+
 ```
 
 ```{r empirical-diagnostics}
-emp_diagnostics |>
-  group_by(fit_id) |>
-  summarise(n_divergent = sum(divergent__), .groups = "drop")
+
+## Check for divergences in the empirical fits
+
+emp_diagnostics |> 
+  group_by(fit_id) |> summarise(n_divergent = sum(divergent__), .groups = "drop")
+
+## Making traceplots 
+
+
+
 ```
