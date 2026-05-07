@@ -340,7 +340,9 @@ alien_data <- read_csv("./data/AlienData.txt", show_col_types = FALSE) |>
     f4 = map_int(features, 4),
     f5 = map_int(features, 5),
     danger_response = as.integer(response %in% c(3, 4)),
-    is_dangerous    = as.integer(f1 == 1 & f3 == 1))
+    is_dangerous    = as.integer(f1 == 1 & f3 == 1),
+    condition = if_else(condition == 1, "Dyad", "Individual"),
+  )
 
 ## Plot empirical cumulative accuracy by condition (averaged over subjects)
 
@@ -354,8 +356,7 @@ alien_data |>
   geom_line(linewidth = 0.8) +
   scale_colour_brewer(
     palette = "Set1",
-    name = "Condition",
-    labels = c("1" = "Dyad", "2" = "Individual")) +
+    name = "Condition") +
   labs(title = "Empirical cumulative accuracy by condition (session 1)", x = "Trial", y = "Cumulative accuracy") +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
 ```
@@ -374,7 +375,7 @@ emp_diagnostics <- tibble()
 for (i in seq_len(nrow(pairs_to_fit))) {
   subj_id <- pairs_to_fit$subject[i]
   cond_id <- pairs_to_fit$condition[i]
-  fit_id  <- sprintf("subj_%d_cond_%d", subj_id, cond_id)
+  fit_id     <- sprintf("subj %d %s", subj_id, cond_id)
   
   subj_dat <- alien_data |> filter(subject == subj_id, condition == cond_id) |> arrange(trial)
   
@@ -437,7 +438,7 @@ for (i in seq_len(nrow(pairs_to_fit))) {
 
 ```
 
-```{r}
+```{r fig.width=15, fig.height=12}
 
 ### Plotting prior vs posterior for the empirical fits (by subject and condition)
 
@@ -487,7 +488,7 @@ bind_rows(
 
 ```
 
-```{r}
+```{r fig.width=12}
 
 ## Posterior predictive empirical
 
