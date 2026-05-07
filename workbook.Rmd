@@ -6,7 +6,7 @@ output: html_document
 ```{r setup}
 ### Packages
 set.seed(0)
-pacman::p_load(cmdstanr, tidyverse, cowplot, posterior, tidybayes, ggh4x, ggpmisc)
+pacman::p_load(cmdstanr, tidyverse, cowplot, posterior, tidybayes, ggh4x, ggpmisc, bayesplot, patchwork)
 theme_set(theme_cowplot())
 
 ### Sampler config 
@@ -363,7 +363,7 @@ alien_data |>
 
 ```{r}
 
-### itting to a subset of the empirical data 
+### Fitting to a subset of the empirical data 
 subj_cond_pairs <- alien_data |> distinct(subject, condition) |> arrange(subject, condition)
 
 pairs_to_fit <- head(subj_cond_pairs, 6) ## can adjust potentially 
@@ -371,6 +371,8 @@ pairs_to_fit <- head(subj_cond_pairs, 6) ## can adjust potentially
 emp_draws <- tibble()
 emp_predictions <- tibble()
 emp_diagnostics <- tibble()
+emp_fits <- list()
+
 
 for (i in seq_len(nrow(pairs_to_fit))) {
   subj_id <- pairs_to_fit$subject[i]
@@ -401,8 +403,11 @@ for (i in seq_len(nrow(pairs_to_fit))) {
     iter_warmup     = n_warmup,
     iter_sampling   = n_sampling,
     adapt_delta     = adapt_delta,
-    refresh         = 0
-  )
+    refresh         = 0)
+    
+  emp_fits[[fit_id]] <- fit
+
+  
   
   ## get draws, posterior predictive sims, and diagnostics for fit and store in respective data frames
   
@@ -492,26 +497,42 @@ bind_rows(
 
 ## Posterior predictive empirical
 
+
 ggplot(emp_predictions, aes(x = trial)) + 
   geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
   geom_line(aes(y = q50), colour = "steelblue",linewidth = 0.7) +
   geom_line(aes(y = obs_acc), colour = "#E84855", linewidth = 0.7) +
-  facet_wrap( ~ fit_id, nrow = 1) +
+  facet_wrap( ~ fit_id, ncol=2) +
   labs(title = "Posterior predictive accuracy by subject and condition (red = observed, blue = predicted)", x = "Trial", y = "Cumulative accuracy") +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.3)
 
 
 ```
 
-```{r empirical-diagnostics}
+```{r empirical-diagnostics, fig.width=20, fig.height=14}
 
 ## Check for divergences in the empirical fits
 
 emp_diagnostics |> 
   group_by(fit_id) |> summarise(n_divergent = sum(divergent__), .groups = "drop")
 
-## Making traceplots 
+## Making traceplots for empirical fits
+emp_params <- c("log_c", "bias", "w") 
 
+trace_plots <- list()
+
+for (fit_id in names(emp_fits)) {
+  fit  <- emp_fits[[fit_id]]
+  np   <- nuts_params(fit)
+  
+ p <- bayesplot::mcmc_trace(
+  fit$draws(format = "array"),
+  regex_pars = c("log_c", "bias", "^w\\["),
+  np = np)
+  
+  trace_plots[[fit_id]] <- p}
+
+wrap_plots(trace_plots, ncol = 4)
 
 
 ```
