@@ -6,7 +6,7 @@ output: html_document
 ```{r setup}
 ### Packages
 set.seed(0)
-pacman::p_load(cmdstanr, tidyverse, cowplot, posterior, tidybayes, ggh4x, ggpmisc, bayesplot, patchwork)
+pacman::p_load(cmdstanr, tidyverse, cowplot, posterior, tidybayes, ggh4x, ggpmisc, bayesplot, patchwork, gridextra)
 theme_set(theme_cowplot())
 
 ### Sampler config 
@@ -116,7 +116,7 @@ w_conditions <- list(
   truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
   wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
 )
-c_values <- c(0.2, 1, 10) ## range over low to high 
+c_values <- c(0.2, 1, 5) ## range over low to high 
 n_agents <- 5
 
 sim_grid <- expand_grid(
@@ -146,7 +146,8 @@ ggplot(sim_grid |> group_by(w_name, c_val, trial) |>
   geom_line() +
   facet_wrap( ~ w_name, labeller = label_both) +
   scale_colour_brewer(palette = "Set1", name = "c") +
-  labs(title = "Mean cumulative accuracy by attention condition and sensitivity", x = "Trial", y = "Cumulative accuracy") +
+  labs(title = "Mean cumulative accuracy by condition and sensitivity", x = "Trial", y = "Cumulative accuracy") +
+  ylim(0, 1) +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
 
 ```
@@ -190,7 +191,7 @@ ggplot(prior_ribbons, aes(x = trial)) +
   geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
   geom_line(aes(y = q50), colour = "steelblue", linewidth = 0.8) +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4) +
-  labs(title = "Prior predictive: cumulative accuracy (5/50/95 percentiles)", x = "Trial", y = "Cumulative accuracy")
+  labs(title = "Prior predictive: cumulative accuracy", x = "Trial", y = "Cumulative accuracy")
 
 ```
 
@@ -357,7 +358,8 @@ alien_data |>
   scale_colour_brewer(
     palette = "Set1",
     name = "Condition") +
-  labs(title = "Empirical cumulative accuracy by condition (session 1)", x = "Trial", y = "Cumulative accuracy") +
+  labs(title = "Empirical cumulative accuracy by condition", x = "Trial", y = "Cumulative accuracy") +
+  ylim(0, 1) +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
 ```
 
@@ -532,7 +534,11 @@ for (fit_id in names(emp_fits)) {
   
   trace_plots[[fit_id]] <- p}
 
-wrap_plots(trace_plots, ncol = 4)
+plots_per_page <- 4
+pages <- split(trace_plots, ceiling(seq_along(trace_plots) / plots_per_page))
+for (i in seq_along(pages)) {
+  print(wrap_plots(pages[[i]], ncol = 2))
+}
 
 
 ```
