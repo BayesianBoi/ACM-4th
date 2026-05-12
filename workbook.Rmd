@@ -52,7 +52,7 @@ gcm_simulate <- function(w,
     n_mem        <- nrow(memory_obs)
     has_cat0     <- any(memory_cat == 0)
     has_cat1     <- any(memory_cat == 1)
-    
+
   if (n_mem == 0 || !has_cat0 || !has_cat1) {
       prob_cat1[i] <- bias} 
       
@@ -288,7 +288,7 @@ prob_draws <- as_draws_matrix(fit_sim$draws("prob_cat1"))
 
 n_yrep   <- 200 ## Number of sims to draw from the posterior predictive distribution
 idx <- sample(nrow(prob_draws), n_yrep)
-yrep_mat <- apply(prob_draws[idx, ], c(1, 2), function(p) rbinom(1, 1, p))
+yrep_mat <- apply(prob_draws[idx, ], c(1, 2), function(p) if_else(p > 0.5, 1, 0))
 
 obs_cum  <- tibble(
   trial = seq_len(nrow(obs_mat)),
