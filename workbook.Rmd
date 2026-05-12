@@ -109,21 +109,21 @@ cat_true <- schedule$danger
 
 ```
 
-```{r}
+```{r figure.width=12}
 ### Simulation grid: attention conditions, sensitivity and agent
 w_conditions <- list(
-  uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
-  truth_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
-  wrong_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
+  w_uniform    = c(0.2, 0.2, 0.2, 0.2, 0.2),
+  w_appropriate_f1f3 = c(0.45, 0.025, 0.45, 0.025, 0.05),
+  w_inappropriate_f2f4 = c(0.025, 0.45, 0.025, 0.45, 0.05)
 )
 c_values <- c(0.2, 1, 5) ## range over low to high 
 n_agents <- 5
 
 sim_grid <- expand_grid(
-  w_name = names(w_conditions),
+  w_scenario = names(w_conditions),
   c_val  = c_values,
   agent  = seq_len(n_agents)) |>
-  mutate(sim = pmap(list(w_name, c_val, agent), function(wn, cv, ag) 
+  mutate(sim = pmap(list(w_scenario, c_val, agent), function(wn, cv, ag) 
     {set.seed(ag) 
     gcm_simulate(
       w = w_conditions[[wn]],
@@ -134,22 +134,21 @@ sim_grid <- expand_grid(
     )
   })) |>
   unnest(sim) |>
-  group_by(w_name, c_val, agent) |>
+  group_by(w_scenario, c_val, agent) |>
   mutate(trial = row_number(), correct = sim_response == cat_true, cum_acc = cummean(correct)) |>
   ungroup()
 
 ## Plotting the simulation results 
 
-ggplot(sim_grid |> group_by(w_name, c_val, trial) |>
+ggplot(sim_grid |> group_by(w_scenario, c_val, trial) |>
     summarise(mean_acc = mean(cum_acc), .groups = "drop"),
   aes(x = trial, y = mean_acc, colour = factor(c_val))) +
   geom_line() +
-  facet_wrap( ~ w_name, labeller = label_both) +
+  facet_wrap( ~ w_scenario) +
   scale_colour_brewer(palette = "Set1", name = "c") +
   labs(title = "Mean cumulative accuracy by condition and sensitivity", x = "Trial", y = "Cumulative accuracy") +
   ylim(0, 1) +
-  geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.4)
-
+  theme(panel.spacing = unit(1, "lines"))
 ```
 
 ```{r}
@@ -496,10 +495,7 @@ bind_rows(
 ```
 
 ```{r fig.width=12}
-
 ## Posterior predictive empirical
-
-
 ggplot(emp_predictions, aes(x = trial)) + 
   geom_ribbon(aes(ymin = q05, ymax = q95), alpha = 0.15, fill = "steelblue") +
   geom_line(aes(y = q50), colour = "steelblue",linewidth = 0.7) +
@@ -507,8 +503,6 @@ ggplot(emp_predictions, aes(x = trial)) +
   facet_wrap( ~ fit_id, ncol=2) +
   labs(title = "Posterior predictive accuracy by subject and condition (red = observed, blue = predicted)", x = "Trial", y = "Cumulative accuracy") +
   geom_hline(yintercept = 0.5, linetype = "dashed", alpha = 0.3)
-
-
 ```
 
 ```{r empirical-diagnostics, fig.width=20, fig.height=14}
